@@ -3,6 +3,9 @@ name = "jwx-rs"
 version = "0.1.0"
 edition = "2021"
 
+[dependencies]
+libc = "0.2.167"
+
 [dependencies.mlua]
 version = "0.10.2"
 features = [ "luajit" ]
