@@ -1,3 +1,6 @@
+use std::collections::HashMap;
+
+#[derive(PartialEq, Clone)]
 pub enum HttpVersion {
     Http1_0,
     Http1_1,
@@ -69,6 +72,9 @@ enum MessageParseState {
 
 pub trait HttpMessage {
     fn parse_first_line(&mut self, line: &str) -> bool;
+    fn get_first_line(&self) -> String;
+    fn get_headers(&self) -> &HashMap<String, String>;
+    fn get_content(&self) -> &[u8];
     fn register_header(&mut self, name: &str, value: &str);
 
     fn register_content(&mut self, data: &[u8]);
@@ -148,5 +154,24 @@ pub trait HttpMessage {
         let val = line[idx+1..].trim();
 
         self.register_header(name, val);
+    }
+
+    fn serialize(&self) -> Vec<u8> {
+        let mut res: Vec<u8> = Vec::new();
+
+        let first_line = self.get_first_line();
+        res.extend_from_slice(first_line.as_bytes());
+
+        for h in self.get_headers() {
+            res.extend_from_slice(h.0.as_bytes());
+            res.extend_from_slice(b": ");
+            res.extend_from_slice(h.1.as_bytes());
+            res.extend_from_slice(b"\r\n");
+        }
+        res.extend_from_slice(b"\r\n");
+
+        res.extend_from_slice(self.get_content());
+
+        res
     }
 }

@@ -4,7 +4,7 @@ use std::process::Command;
 
 fn main() {
 	let profile = env::var("PROFILE").unwrap_or("debug".to_string());
-	let target_str = env::var("CARGO_TARGET_DIRE").unwrap_or_else( |_| {
+	let target_str = env::var("CARGO_TARGET_DIR").unwrap_or_else( |_| {
 		let mut tgt = "./target/".to_string();
 		tgt.push_str(&profile);
 		tgt.push_str("/");

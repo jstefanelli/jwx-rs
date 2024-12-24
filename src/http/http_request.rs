@@ -14,15 +14,16 @@ impl HttpRequest {
     pub fn parse(data: &[u8]) -> Option<HttpRequest> {
         let mut this = HttpRequest {
             method: HttpMethod::Get,
-            headers: Default::default(),
+            headers: HashMap::new(),
             content: vec![],
             version: HttpVersion::Http1_0,
-            url: URL { uri: "".to_string(), queries: Default::default() },
+            url: URL { uri: "".to_string(), queries: HashMap::new() },
         };
 
         if this.load(data) {
             return Some(this);
         }
+
         None
     }
 }
@@ -45,7 +46,15 @@ impl HttpMessage for HttpRequest {
         self.url = match next_section.find(' ') {
             Some(idx) => {
                 match URL::parse(next_section[0..idx].trim()) {
-                    Some(url) => url,
+                    Some(url) => {
+                        if let Some(v) = HttpVersion::from_str(next_section[idx..].trim()) {
+                            self.version = v;
+                        } else {
+                            return false
+                        }
+                        url
+                    }
+
                     None => return false
                 }
             },
@@ -53,6 +62,21 @@ impl HttpMessage for HttpRequest {
         };
 
         true
+    }
+
+    fn get_first_line(&self) -> String {
+        let version_str = self.version.to_str().to_string();
+        let method = self.method.to_str().to_string();
+        let path = self.url.to_string();
+        format!("{method} {path} {version_str}\r\n")
+    }
+
+    fn get_headers(&self) -> &HashMap<String, String> {
+        &self.headers
+    }
+
+    fn get_content(&self) -> &[u8] {
+        &self.content
     }
 
     fn register_header(&mut self, name: &str, value: &str) {

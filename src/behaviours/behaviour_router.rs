@@ -1,9 +1,11 @@
 use std::collections::HashMap;
 use std::fmt::Display;
-use std::net::TcpStream;
+use std::io::Write;
 use crate::behaviours::behaviour::Behaviour;
 use crate::behaviours::behaviour_router::RoutePartType::PARAMETER;
+use crate::http::http_message::HttpVersion;
 use crate::http::http_request::HttpRequest;
+use crate::http::http_response::HttpResponse;
 
 #[derive(PartialEq, Debug)]
 pub enum RoutePartType {
@@ -94,13 +96,23 @@ impl Display for Route {
     }
 }
 
+fn not_found(ver: HttpVersion) -> HttpResponse {
+    let content = "404: Not Found".as_bytes();
+    HttpResponse::new(
+        404,
+        HashMap::from([("Content-Length".to_string(), format!("{}", content.len()))]),
+        content.to_vec(),
+        ver
+    )
+}
+
 struct RouteTreeLeaf {
     leaves: HashMap<String, RouteTreeLeaf>,
     behaviour: Option<Box< dyn Behaviour>>,
     route: Route
 }
 
-struct BehaviourRouter {
+pub struct BehaviourRouter {
     tree: RouteTreeLeaf
 }
 
@@ -197,7 +209,7 @@ impl BehaviourRouter {
         parts
     }
 
-    pub fn run(&self, req: &HttpRequest, stream: &mut TcpStream) -> bool {
+    pub fn run(&self, req: &HttpRequest) -> HttpResponse {
 
         let uri = &req.url.uri;
         let parts = BehaviourRouter::get_uri_parts(uri);
@@ -206,7 +218,9 @@ impl BehaviourRouter {
 
         let (route, behaviour) = match result {
             Some((r, b)) => (r, b),
-            None => return false
+            None => {
+                return not_found(req.version.clone());
+            }
         };
 
         let mut parameters: HashMap<String, String> = HashMap::new();
@@ -223,7 +237,14 @@ impl BehaviourRouter {
             }
         }
 
-        behaviour.run(req, parameters, stream)
+        match behaviour.run(req, parameters) {
+            Ok(resp) => resp,
+            Err(e) => {
+                let content = format!("500: Internal server error: {:?}", e);
+                let content_bytes = content.as_bytes();
+                HttpResponse::new(500, HashMap::from([("Content-Length".to_string(), content_bytes.len().to_string())]), content_bytes.to_vec(), req.version.clone())
+            }
+        }
     }
 
     pub fn get(&self, uri: &str) -> Option<(&Route, &Box<dyn Behaviour>)> {

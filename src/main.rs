@@ -1,14 +1,17 @@
 mod url;
 mod utils;
-mod request_router;
 mod http_client;
+mod ipc;
+mod dispatcher;
 
 mod http {
     pub mod http_message;
     pub mod http_request;
+    pub mod http_response;
 }
 
 mod behaviours {
+    pub mod lua_behaviour;
     pub mod behaviour_router;
     pub mod behaviour;
 }
@@ -18,12 +21,17 @@ mod config {
 }
 
 use std::collections::HashMap;
-use std::env;
+use std::{env, thread};
+use std::fs::File;
 use std::net::TcpListener;
-use mlua::prelude::*;
+use std::sync::{Arc, Mutex};
+use std::thread::{JoinHandle};
 use http_client::HttpClient;
 use crate::config::lua_config::ConfigMgr;
-use crate::utils::{safe_fork, ForkResult};
+use crate::dispatcher::run_lua_dispatcher;
+use crate::ipc::{IpcMessage};
+use crate::ipc::request_pipe::RequestPipe;
+use crate::utils::{new_pipe, safe_fork, ForkResult};
 
 struct ArgDefinition {
     name: String,
@@ -36,13 +44,12 @@ const VERSION: &str = env!("CARGO_PKG_VERSION");
 fn parse_args(args: &Vec<String>, definitions: &Vec<ArgDefinition>) -> Result<HashMap<String, String>, String> {
     let mut current_arg: Option<&ArgDefinition> = None;
     let mut values: HashMap<String, String> = HashMap::new();
-    let mut first = true;
 
-    'outer: for arg in args {
-        if first {
-            first = false;
-            continue;
-        }
+    if args.len() <= 1 {
+        return Ok(values);
+    }
+
+    'outer: for arg in &args[1..] {
 
         let short = Some(arg.to_string());
         for def in definitions {
@@ -80,11 +87,59 @@ fn parse_args(args: &Vec<String>, definitions: &Vec<ArgDefinition>) -> Result<Ha
     Ok(values)
 }
 
-fn main() -> LuaResult<()> {
+fn run_listener(target_port: u16, lua_send: File, control_recv: File) -> Result<(), std::io::Error> {
+
+    let addr = format!("0.0.0.0:{}", target_port);
+
+    let listener = TcpListener::bind(addr)?;
+    let mut client_threads: Vec<JoinHandle<()>> = Vec::new();
+
+    let communicator = Arc::new(Mutex::new(RequestPipe::new(lua_send, control_recv)));
+
+    loop {
+        match listener.accept() {
+            Ok((stream, addr)) => {
+                let clone = communicator.clone();
+                let t = thread::spawn(move || {
+                    HttpClient::new(stream, addr, clone).run();
+                });
+
+                client_threads.push(t);
+            },
+            Err(e) => {
+                println!("accept error = {:?}", e);
+                break;
+            }
+        }
+    }
+
+
+    let mut send = match communicator.lock() {
+        Ok(s) => s,
+        Err(_) => {
+            println!("Error while locking send mutex");
+            return Ok(());
+        }
+    };
+
+    println!("[Listener] Sending close message");
+    _ = send.send_message_and_wait(IpcMessage::Close);
+
+    for j in client_threads.drain(..) {
+        match j.join() {
+            Ok(_) => (),
+            Err(e) => println!("Error while joining client thread: {:?}", e)
+        }
+    }
+
+    Ok(())
+}
+
+fn main() -> Result<(), std::io::Error> {
     let mut target_content_path = "./content";
     let mut target_config_path = "./config";
     let mut target_config_file = "jwx_config.lua";
-    let mut target_port = "4955";
+    let mut target_port: u16 = 4955;
 
     let args: Vec<String> = env::args().collect();
 
@@ -105,12 +160,12 @@ fn main() -> LuaResult<()> {
             has_value: true,
         },
         ArgDefinition {
-            name: "--config_dir_path".to_string(),
+            name: "--config-dir".to_string(),
             shorthand: None,
             has_value: true,
         },
         ArgDefinition {
-            name: "--config_file".to_string(),
+            name: "--config-file".to_string(),
             shorthand: None,
             has_value: true,
         }
@@ -125,8 +180,8 @@ fn main() -> LuaResult<()> {
         println!("  -h, --help              Show this help message and exit");
         println!("  -c, --content-path      Path to content directory (default: ./content)");
         println!("      --port              Port to listen on (default: 4955)");
-        println!("      --config_dir_path   Path to config directory (default: ./config)");
-        println!("      --config_file       Name of config file (default: jwx_config.lua)");;
+        println!("      --config-dir        Path to config directory (default: ./config)");
+        println!("      --config-file       Name of config file (default: jwx_config.lua)");
         return Ok(());
     }
 
@@ -135,44 +190,49 @@ fn main() -> LuaResult<()> {
     }
 
     if let Some(port) = my_args.get("--port") {
-        target_port = port;
+        target_port = match port.parse::<u16>() {
+            Ok(p) => p,
+            Err(_) => {
+                println!("Invalid port: {}", port);
+                return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "Invalid port"));
+            }
+        };
     }
 
-    if let Some(path) = my_args.get("--config_dir_path") {
+    if let Some(path) = my_args.get("--config-dir") {
         target_config_path = path;
     }
 
-    if let Some(file) = my_args.get("--config_file") {
+    if let Some(file) = my_args.get("--config-file") {
         target_config_file = file;
     }
 
-    let addr = format!("0.0.0.0:{}", target_port);
-
-    let listener = TcpListener::bind(addr)?;
 
     let mut mgr = ConfigMgr::new(target_config_path);
     mgr.run_config(&target_config_file);
 
-    loop {
-        match listener.accept() {
-            Ok((stream, addr)) => {
-                match safe_fork() {
-                    Ok(ForkResult::Child) => {
-                        HttpClient::new(stream, addr).run();
-                    },
-                    Ok(_) => {},
-                    Err(e) => {
-                        println!("Fork error: {}", e);
-                        break;
-                    }
-                }
-            },
-            Err(e) => {
-                println!("accept error = {:?}", e);
-                break;
-            }
+    let (lua_recv, lua_send) = match new_pipe() {
+        Ok(res) => res,
+        Err(e) => {
+            return Err(e);
+        }
+    };
+
+    let (control_recv, control_send) = match new_pipe() {
+        Ok(res) => res,
+        Err(e) => {
+            return Err(e);
+        }
+    };
+
+    match safe_fork() {
+        Ok(ForkResult::Child) => {
+            run_lua_dispatcher(mgr, lua_recv, control_send)
+        },
+        Ok(ForkResult::Parent(_)) => run_listener(target_port, lua_send, control_recv),
+        Err(e) => {
+            return Err(e)
         }
     }
 
-    Ok(())
 }

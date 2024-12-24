@@ -41,7 +41,7 @@ impl ConfigMgr {
 		&self.endpoints
 	}
 
-	pub fn append_library_folder(&self, lua: Lua) {
+	pub fn append_library_folders(&self, lua: &Lua) {
 		let package_table: Table = match lua.globals().get("package") {
 			Ok(v) => v,
 			Err(_) => return //TODO: Log error
@@ -68,7 +68,7 @@ impl ConfigMgr {
 
 	pub fn run_config(&mut self, config_path: &str) {
 		let lua = Lua::new();
-		self.append_library_folder(lua.clone());
+		self.append_library_folders(&lua);
 
 		let endpoints = self.endpoints.clone();
 		let library_folders = self.library_folders.clone();

@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::fmt::Display;
 
 pub struct URL {
     pub uri: String,
@@ -31,7 +32,6 @@ impl URL {
         let mut queries = HashMap::new();
         let mut work_idx: Option<usize> = Some(0);
         'a: loop {
-
             let start = match work_idx {
                 Some(idx) => idx,
                 None => break 'a
@@ -72,6 +72,27 @@ impl URL {
             uri: uri,
             queries: queries
         });
+    }
+}
+
+impl Display for URL {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let mut res = self.uri.clone();
+        if !self.queries.is_empty() {
+            res = res + "?";
+            let mut first = true;
+            for (k, v) in &self.queries {
+                if !first {
+                    res = res + "&";
+                } else {
+                    first = false;
+                }
+
+                res = res + k + "=" + v;
+            }
+        }
+
+        write!(f, "{}", res)
     }
 }
 
