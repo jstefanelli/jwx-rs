@@ -1,6 +1,5 @@
 use std::collections::HashMap;
 use std::fmt::Display;
-use std::io::Write;
 use crate::behaviours::behaviour::Behaviour;
 use crate::behaviours::behaviour_router::RoutePartType::PARAMETER;
 use crate::http::http_message::HttpVersion;

@@ -94,12 +94,18 @@ impl HttpResponse {
 	}
 
 	pub fn new(code: u16, headers: HashMap<String, String>, content: Vec<u8>, version: HttpVersion) -> HttpResponse {
-		HttpResponse {
+		let mut resp = HttpResponse {
 			code,
 			headers,
 			version,
 			content
-		}
+		};
+
+		//if !resp.headers.contains_key("Content-Length") { // Maybe leave this out?
+			resp.headers.insert("Content-Length".to_string(), resp.content.len().to_string());
+		//}
+
+		resp
 	}
 }
 
@@ -151,5 +157,6 @@ impl HttpMessage for HttpResponse {
 
 	fn register_content(&mut self, data: &[u8]) {
 		self.content = data.to_vec();
+		self.headers.insert("Content-Length".to_string(), self.content.len().to_string());
 	}
 }
